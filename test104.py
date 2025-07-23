@@ -294,30 +294,22 @@ class TEM104_Serial_Client(TEM104_Base_Client):
         self.ser.reset_input_buffer()
         self.ser.write(packet)
         print_hex(packet, "-> Отправка: ")
-        
-        # Улучшенная логика чтения ответа для COM-порта
-        header = self.ser.read(6) # Читаем заголовок
-        if not header or len(header) < 6:
-            print("ОШИБКА: Таймаут при чтении заголовка ответа.")
+        # "Умное" чтение: сначала читаем заголовок (6 байт)
+        header = self.ser.read(6)
+        if len(header) < 6:
+            print("ОШИБКА: не получен заголовок ответа.")
             return None
-        
-        if header[0] != RESPONSE_START_BYTE or header[1] != self.address:
-            print("ОШИБКА: Неверный заголовок ответа.")
+        # Длина полезной нагрузки в 6-м байте
+        payload_len = header[5]
+        # Читаем payload и контрольную сумму
+        payload_and_crc = self.ser.read(payload_len + 1)
+        if len(payload_and_crc) < payload_len + 1:
+            print("ОШИБКА: не получен полный ответ.")
             return None
-
-        data_len = header[5]
-        bytes_to_read = data_len + 1 # Данные + контрольная сумма
-        body = self.ser.read(bytes_to_read)
-
-        if not body or len(body) < bytes_to_read:
-            print(f"ОШИБКА: Таймаут при чтении тела ответа. Ожидалось {bytes_to_read}, получено {len(body)}.")
-            return None
-
-        response = header + body
+        response = header + payload_and_crc
         print_hex(response, "<- Получено: ")
-        
-        if (sum(response) & 0xFF) != 0xFF:
-            print("ОШИБКА: Неверная контрольная сумма ответа.")
+        if response[0] != RESPONSE_START_BYTE or response[1] != self.address or (sum(response) & 0xFF) != 0xFF:
+            print("ОШИБКА: Неверный заголовок или контрольная сумма ответа.")
             return None
         return response[6:-1]
 
@@ -353,33 +345,27 @@ class TEM104_TCP_Client(TEM104_Base_Client):
         try:
             print_hex(packet, "-> Отправка: ")
             self.sock.sendall(packet)
-            
-            # Улучшенная логика чтения ответа для TCP
-            header = self.sock.recv(6)
-            if not header or len(header) < 6:
-                print("ОШИБКА: Таймаут при чтении заголовка ответа.")
-                return None
-
-            if header[0] != RESPONSE_START_BYTE or header[1] != self.address:
-                print("ОШИБКА: Неверный заголовок ответа.")
-                return None
-            
-            data_len = header[5]
-            bytes_to_read = data_len + 1
-            body = b''
-            # Цикл для гарантированного чтения всего тела пакета
-            while len(body) < bytes_to_read:
-                chunk = self.sock.recv(bytes_to_read - len(body))
+            # "Умное" чтение: сначала читаем заголовок (6 байт)
+            header = b''
+            while len(header) < 6:
+                chunk = self.sock.recv(6 - len(header))
                 if not chunk:
-                    # Соединение разорвано до получения всех данных
-                    raise ConnectionError("Соединение разорвано во время чтения тела ответа.")
-                body += chunk
-
-            response = header + body
+                    print("ОШИБКА: не получен заголовок ответа.")
+                    return None
+                header += chunk
+            payload_len = header[5]
+            # Читаем payload и контрольную сумму
+            payload_and_crc = b''
+            while len(payload_and_crc) < payload_len + 1:
+                chunk = self.sock.recv(payload_len + 1 - len(payload_and_crc))
+                if not chunk:
+                    print("ОШИБКА: не получен полный ответ.")
+                    return None
+                payload_and_crc += chunk
+            response = header + payload_and_crc
             print_hex(response, "<- Получено: ")
-
-            if (sum(response) & 0xFF) != 0xFF:
-                print("ОШИБКА: Неверная контрольная сумма ответа.")
+            if response[0] != RESPONSE_START_BYTE or response[1] != self.address or (sum(response) & 0xFF) != 0xFF:
+                print("ОШИБКА: Неверный заголовок или контрольная сумма ответа.")
                 return None
             return response[6:-1]
         except socket.timeout:
