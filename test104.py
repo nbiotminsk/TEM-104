@@ -1,11 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-Скрипт для опроса и чтения данных с теплосчетчиков ТЭМ-104 различных моделей (ARVAS, TESMART и др.)
-Работает через COM-порт или TCP/IP, автоматически определяет модель счетчика и протокол, выводит основные параметры.
-"""
-
-# 1. Импорт библиотек и константы
-# Импортируются необходимые модули и определяются константы протокола
 import socket
 import serial
 import time
@@ -25,9 +18,7 @@ CMD_READ_RAM = 0x01
 
 ProtocolType = Literal['ARVAS_LEGACY', 'ARVAS_LEGACY_1', 'TESMART', 'ARVAS_M', 'ARVAS_M1']
 
-# 2. Вспомогательные функции
-# Функции для вывода данных и преобразования форматов
-
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def print_hex(data: bytes or bytearray, prefix: str = ""):
     """Удобная функция для печати байт в HEX-формате."""
     print(f"{prefix}{' '.join(f'{b:02X}' for b in data)}")
@@ -36,9 +27,7 @@ def bcd_to_int(bcd_byte: int) -> int:
     """Преобразует один байт BCD в integer."""
     return (bcd_byte >> 4) * 10 + (bcd_byte & 0x0F)
 
-# 3. Базовый класс протокола
-# Содержит логику формирования и разбора пакетов, маршрутизацию команд по протоколам
-
+# --- БАЗОВЫЙ КЛАСС С ЛОГИКОЙ ПРОТОКОЛА ---
 class TEM104_Base_Client:
     """
     Базовый класс, содержащий всю логику протокола ТЭМ-104,
@@ -58,14 +47,12 @@ class TEM104_Base_Client:
         raise NotImplementedError("Метод _send_and_receive должен быть реализован в дочернем классе.")
 
     def _create_packet(self, group: int, cmd: int, data: bytes = b'') -> bytearray:
-        """Формирует пакет запроса."""
         inv_addr = (~self.address) & 0xFF
         packet = bytearray([REQUEST_START_BYTE, self.address, inv_addr, group, cmd, len(data)]) + data
         packet.append((~sum(packet)) & 0xFF)
         return packet
 
     def auto_detect_protocol(self) -> Optional[ProtocolType]:
-        """Автоматически определяет модель счетчика по его ответу на команду идентификации."""
         print("\n--- 1. Автоматическое определение протокола ---")
         packet = self._create_packet(CMD_GROUP_CONNECTION, CMD_IDENTIFY)
         payload = self._send_and_receive(packet)
@@ -81,7 +68,6 @@ class TEM104_Base_Client:
         return None
 
     def read_all_data(self):
-        """Главный метод-маршрутизатор для чтения данных."""
         if not self.protocol_type:
             self.protocol_type = self.auto_detect_protocol()
             if not self.protocol_type:
@@ -90,7 +76,7 @@ class TEM104_Base_Client:
         print(f"\nИспользуется протокол: {self.protocol_type}")
         time.sleep(0.5)
 
-        # Вызов соответствующего метода чтения в зависимости от протокола
+        # Маршрутизатор: вызываем нужный метод для определенного протокола
         if self.protocol_type == 'ARVAS_M1': self._read_arvas_m1_data()
         elif self.protocol_type == 'ARVAS_M': self._read_arvas_m_data()
         elif self.protocol_type == 'ARVAS_LEGACY_1': self._read_arvas_legacy_1_data()
@@ -99,41 +85,76 @@ class TEM104_Base_Client:
         else:
             print(f"Логика чтения для {self.protocol_type} не реализована.")
     
-    # --- Методы чтения данных для разных протоколов ---
+    # --- БЛОКИ ЧТЕНИЯ ДАННЫХ ДЛЯ КАЖДОГО ПРОТОКОЛА ---
+
     def _read_arvas_m1_data(self):
+        """
+        Протокол: ARVAS_M1 (ТЭМ-104М-1)
+        Источник: TEM-104M1_PO_v_1_1.pdf
+        """
         print("\n--- Чтение данных (протокол ARVAS_M1) ---")
+        # Время: команда 0F02, адрес 0x00 (стр. 15)
         self._read_rtc_decimal()
-        time.sleep(0.2)
+        time.sleep(0.5)
+        # Итоги: команда 0F01, базовый адрес 0x0180 (стр. 10, 14)
         self._read_totals(CMD_READ_CONFIG, 0x0180, {'h_v': 0x08, 'h_m': 0x0C, 'h_q': 0x10, 'i_v': 0x18, 'i_m': 0x1C, 'i_q': 0x20})
-        time.sleep(0.2)
+        time.sleep(0.5)
+        # Мгновенные: команда 0C01, базовый адрес 0x4000 (стр. 15)
         self._read_instantaneous(0x4000, {'t': 0x00, 'pwr': 0x28}, num_temps=2)
 
     def _read_arvas_m_data(self):
+        """
+        Протокол: ARVAS_M (ТЭМ-104М)
+        Источник: TEM104M_PO_v1-3.pdf
+        """
         print("\n--- Чтение данных (протокол ARVAS_M) ---")
+        # Время: команда 0F02, адрес 0x00 (стр. 15)
         self._read_rtc_decimal()
-        time.sleep(0.2)
+        time.sleep(0.5)
+        # Итоги: команда 0F01, базовый адрес 0x0800 (стр. 10, 14)
         self._read_totals(CMD_READ_CONFIG, 0x0800, {'h_v': 0x08, 'h_m': 0x18, 'h_q': 0x28, 'i_v': 0x48, 'i_m': 0x58, 'i_q': 0x68})
-        time.sleep(0.2)
+        time.sleep(0.5)
+        # Мгновенные: команда 0C01, базовый адрес 0x0000 (стр. 15)
         self._read_instantaneous(0x0000, {'t': 0x00, 'pwr': 0x60}, num_temps=4)
 
     def _read_arvas_legacy_1_data(self):
+        """
+        Протокол: ARVAS_LEGACY_1 (ТЭМ-104-1)
+        Источник: tem-104-1_po.pdf
+        """
         print("\n--- Чтение данных (протокол ARVAS_LEGACY_1) ---")
+        # Время: команда 0F02, адрес 0x00 (стр. 11)
         self._read_rtc_bcd()
-        time.sleep(0.2)
+        time.sleep(0.5)
+        # Итоги: команда 0F01, базовый адрес 0x0100 (стр. 10, параметр VH на 0x0144)
         self._read_totals(CMD_READ_CONFIG, 0x0100, {'h_v': 0x44, 'i_v': 0x48, 'h_m': 0x4C, 'i_m': 0x50, 'h_q': 0x54, 'i_q': 0x58})
-        time.sleep(0.2)
+        time.sleep(0.5)
+        # Мгновенные: команда 0C01, базовый адрес 0x00B8 (стр. 12, параметр tmp на 0x0C0)
         self._read_instantaneous(0x00B8, {'t': 0x08, 'pwr': -1}, num_temps=2)
 
     def _read_arvas_legacy_data(self):
+        """
+        Протокол: ARVAS_LEGACY (старый ТЭМ-104)
+        Источник: TEM-104_PO.pdf
+        """
         print("\n--- Чтение данных (протокол ARVAS_LEGACY) ---")
+        # Время: команда 0F02, адрес 0x10 (стр. 12)
         self._read_rtc_bcd()
-        time.sleep(0.2)
+        time.sleep(0.5)
+        # Итоги: команда 0F01, базовый адрес 0x0200 (стр. 10, структура SysInt_copy1)
         self._read_totals(CMD_READ_CONFIG, 0x0200, {'h_v': 0x38, 'i_v': 0x08, 'h_m': 0x48, 'i_m': 0x18, 'h_q': 0x58, 'i_q': 0x28})
-        time.sleep(0.2)
+        time.sleep(0.5)
+        # Мгновенные: команда 0C01, базовый адрес 0x2200 (стр. 13)
         self._read_instantaneous(0x2200, {'t': 0x00, 'pwr': 0x60}, num_temps=4)
         
     def _read_tesmart_data(self):
+        """
+        Протокол: TESMART (ТЭМ-104 ТЭСМАРТ)
+        Источник: tem-104(tesmart)_po.pdf
+        """
         print("\n--- Чтение данных (протокол ТЭСМАРТ) ---")
+        # В этой модели все данные лежат в одном большом блоке памяти таймера 2К.
+        # Читаем его по частям и собираем в единый payload.
         full_payload = bytearray()
         for i in range(5):
             addr_h, addr_l = i, 0x00
@@ -143,28 +164,40 @@ class TEM104_Base_Client:
                 print("ОШИБКА: не удалось прочитать все блоки памяти ТЭСМАРТ.")
                 return
             full_payload.extend(payload_part)
-            time.sleep(0.2)
+            time.sleep(0.5)
         self._parse_tesmart_payload(full_payload)
 
-    # --- Методы разбора и чтения отдельных блоков данных ---
     def _parse_tesmart_payload(self, payload: bytes):
+        """Разбор единого блока данных для протокола ТЭСМАРТ."""
         try:
             print("\n--- Разбор данных ТЭСМАРТ ---")
+            # Время: адрес 0x0482 (стр. 8)
             ss, mm, hh, dd, MM, YY = (bcd_to_int(payload[a]) for a in range(0x482, 0x488))
             print(f"Текущее время: 20{YY:02d}-{MM:02d}-{dd:02d} {hh:02d}:{mm:02d}:{ss:02d}")
+            
+            # Коэффициенты для расчета итогов: адрес 0x02FA (стр. 8, 11)
             comma_v = payload[0x02FA:0x0300]
             k_v, k_q = ([self._get_tesmart_coeff(c, 'volume') for c in comma_v], [self._get_tesmart_coeff(c, 'energy') for c in comma_v])
+            
+            # Итоги: базовый адрес 0x0300 (стр. 8)
             i_vol, h_vol = struct.unpack('>6f', payload[0x0300:0x0318]), struct.unpack('>6L', payload[0x0318:0x0330])
             i_mass, h_mass = struct.unpack('>6f', payload[0x0330:0x0348]), struct.unpack('>6L', payload[0x0348:0x0360])
             i_energy, h_energy = struct.unpack('>6f', payload[0x0360:0x0378]), struct.unpack('>6L', payload[0x0378:0x0390])
-            total_v, total_m, total_q = ([(h + i) / k for h, i, k in zip(h_vol, i_vol, k_v)], [(h + i) / k for h, i, k in zip(h_mass, i_mass, k_v)], [(h + i) / k for h, i, k in zip(h_energy, i_energy, k_q)])
+            
+            total_v = [(h + i) / k for h, i, k in zip(h_vol, i_vol, k_v)]
+            total_m = [(h + i) / k for h, i, k in zip(h_mass, i_mass, k_v)]
+            total_q = [(h + i) / k for h, i, k in zip(h_energy, i_energy, k_q)]
+
             print("\nНакопленные итоги:")
             print(f"  Объем (V, м³): {[f'{v:.3f}' for v in total_v]}")
             print(f"  Масса (M, т): {[f'{m:.3f}' for m in total_m]}")
             print(f"  Энергия (Q, МВт*ч): {[f'{q:.4f}' for q in total_q]}")
         except (struct.error, IndexError) as e: print(f"ОШИБКА разбора данных ТЭСМАРТ: {e}")
 
+    # --- УНИФИЦИРОВАННЫЕ МЕТОДЫ ЧТЕНИЯ ---
+
     def _read_rtc_decimal(self):
+        """Читает время в десятичном формате (для моделей М и М-1)."""
         print("\n--- 2a. Чтение времени (Decimal) ---")
         packet = self._create_packet(CMD_GROUP_READ_MEM, CMD_READ_RTC, data=b'\x00\x07')
         payload = self._send_and_receive(packet)
@@ -173,49 +206,36 @@ class TEM104_Base_Client:
             print(f"Успешно: Текущее время: 20{YY:02d}-{MM:02d}-{dd:02d} {hh:02d}:{mm:02d}:{ss:02d}")
 
     def _read_rtc_bcd(self):
-        """
-        ИСПРАВЛЕНО: Читает время в BCD формате, учитывая различия в протоколах
-        старых моделей.
-        """
+        """Читает время в BCD формате, учитывая различия в старых протоколах."""
         print("\n--- 2a. Чтение времени (BCD) ---")
-        
         if self.protocol_type == 'ARVAS_LEGACY':
-            # Для самой старой модели адрес и смещения другие (TEM-104_PO.pdf, стр. 12)
-            req_data = bytearray([0x10, 0x0A]) # Адрес 0x10, длина 10 байт
+            req_data = bytearray([0x10, 0x0A])
             packet = self._create_packet(CMD_GROUP_READ_MEM, CMD_READ_RTC, data=req_data)
             payload = self._send_and_receive(packet)
             if payload and len(payload) >= 10:
-                # Парсинг с учетом пропусков в структуре данных
-                ss = bcd_to_int(payload[0])
-                mm = bcd_to_int(payload[2])
-                hh = bcd_to_int(payload[4])
-                dd = bcd_to_int(payload[7])
-                MM = bcd_to_int(payload[8])
-                YY = bcd_to_int(payload[9])
+                ss, mm, hh = bcd_to_int(payload[0]), bcd_to_int(payload[2]), bcd_to_int(payload[4])
+                dd, MM, YY = bcd_to_int(payload[7]), bcd_to_int(payload[8]), bcd_to_int(payload[9])
                 print(f"Успешно: Текущее время: 20{YY:02d}-{MM:02d}-{dd:02d} {hh:02d}:{mm:02d}:{ss:02d}")
-                
         elif self.protocol_type == 'ARVAS_LEGACY_1':
-            # Для модели -1 свой формат (tem-104-1_po.pdf, стр. 11)
-            req_data = bytearray([0x00, 0x07]) # Адрес 0x00, длина 7 байт
+            req_data = bytearray([0x00, 0x07])
             packet = self._create_packet(CMD_GROUP_READ_MEM, CMD_READ_RTC, data=req_data)
             payload = self._send_and_receive(packet)
             if payload and len(payload) >= 7:
-                # Парсинг без пропусков
                 ss, mm, hh = bcd_to_int(payload[0]), bcd_to_int(payload[1]), bcd_to_int(payload[2])
                 dd, MM, YY = bcd_to_int(payload[4]), bcd_to_int(payload[5]), bcd_to_int(payload[6])
                 print(f"Успешно: Текущее время: 20{YY:02d}-{MM:02d}-{dd:02d} {hh:02d}:{mm:02d}:{ss:02d}")
 
     def _read_totals(self, command: int, base_addr: int, offsets: dict):
+        """Унифицированный метод чтения итоговых значений."""
         print("\n--- 2b. Чтение накопленных итогов ---")
         addr_h, addr_l = (base_addr >> 8) & 0xFF, base_addr & 0xFF
         packet = self._create_packet(CMD_GROUP_READ_MEM, command, data=bytearray([addr_h, addr_l, 0xFF]))
         payload = self._send_and_receive(packet)
         if payload:
             try:
-                rel_payload = payload[base_addr % 256:]
-                h_v, i_v = struct.unpack('>L', rel_payload[offsets['h_v']:offsets['h_v']+4])[0], struct.unpack('>f', rel_payload[offsets['i_v']:offsets['i_v']+4])[0]
-                h_m, i_m = struct.unpack('>L', rel_payload[offsets['h_m']:offsets['h_m']+4])[0], struct.unpack('>f', rel_payload[offsets['i_m']:offsets['i_m']+4])[0]
-                h_q, i_q = struct.unpack('>L', rel_payload[offsets['h_q']:offsets['h_q']+4])[0], struct.unpack('>f', rel_payload[offsets['i_q']:offsets['i_q']+4])[0]
+                h_v, i_v = struct.unpack('>L', payload[offsets['h_v']:offsets['h_v']+4])[0], struct.unpack('>f', payload[offsets['i_v']:offsets['i_v']+4])[0]
+                h_m, i_m = struct.unpack('>L', payload[offsets['h_m']:offsets['h_m']+4])[0], struct.unpack('>f', payload[offsets['i_m']:offsets['i_m']+4])[0]
+                h_q, i_q = struct.unpack('>L', payload[offsets['h_q']:offsets['h_q']+4])[0], struct.unpack('>f', payload[offsets['i_q']:offsets['i_q']+4])[0]
                 print("Успешно: Накопленные итоги прочитаны.")
                 print(f"  Объем (V, м³): {h_v + i_v:.3f}")
                 print(f"  Масса (M, т): {h_m + i_m:.3f}")
@@ -223,19 +243,21 @@ class TEM104_Base_Client:
             except (struct.error, IndexError) as e: print(f"ОШИБКА разбора итогов: {e}")
 
     def _read_instantaneous(self, base_addr: int, offsets: dict, num_temps: int):
+        """Унифицированный метод чтения мгновенных значений."""
         print("\n--- 2c. Чтение мгновенных параметров ---")
         addr_h, addr_l = (base_addr >> 8) & 0xFF, base_addr & 0xFF
         packet = self._create_packet(CMD_GROUP_READ_RAM, CMD_READ_RAM, data=bytearray([addr_h, addr_l, 0xFF]))
         payload = self._send_and_receive(packet)
         if payload:
             try:
-                rel_payload = payload[base_addr % 256:]
-                temps = struct.unpack(f'>{num_temps}f', rel_payload[offsets['t']:offsets['t'] + 4 * num_temps])
+                temps = struct.unpack(f'>{num_temps}f', payload[offsets['t']:offsets['t'] + 4 * num_temps])
                 print("Успешно: Мгновенные параметры прочитаны.")
                 print(f"  Температуры (°C): {[f'{t:.2f}' for t in temps]}")
                 if offsets['pwr'] != -1:
-                    power = struct.unpack('>f', rel_payload[offsets['pwr']:offsets['pwr']+4])[0]
+                    power = struct.unpack('>f', payload[offsets['pwr']:offsets['pwr']+4])[0]
                     print(f"  Мощность (Гкал/ч): {power:.4f}")
+                else:
+                    print("  Мощность (Q): не доступна в этом запросе для данной модели.")
             except (struct.error, IndexError) as e: print(f"ОШИБКА разбора мгновенных параметров: {e}")
             
     @staticmethod
@@ -243,9 +265,7 @@ class TEM104_Base_Client:
         coeffs = {'energy': {6: 100000, 5: 10000, 4: 1000, 3: 100, 2: 10}, 'volume': {5: 1000, 4: 100, 3: 10}}
         return coeffs.get(param_type, {}).get(comma_val, 1)
 
-# 4. Класс для работы через COM-порт
-# Реализует транспортный уровень для локального подключения через COM-порт
-
+# --- КЛАССЫ ТРАНСПОРТНОГО УРОВНЯ ---
 class TEM104_Serial_Client(TEM104_Base_Client):
     """Реализация транспортного уровня для локального COM-порта."""
     def __init__(self, port: str, baudrate: int, address: int, **kwargs):
@@ -274,18 +294,32 @@ class TEM104_Serial_Client(TEM104_Base_Client):
         self.ser.reset_input_buffer()
         self.ser.write(packet)
         print_hex(packet, "-> Отправка: ")
-        response = self.ser.read(270)
-        if not response:
-            print("ОШИБКА: Счетчик не ответил (таймаут).")
+        
+        # Улучшенная логика чтения ответа для COM-порта
+        header = self.ser.read(6) # Читаем заголовок
+        if not header or len(header) < 6:
+            print("ОШИБКА: Таймаут при чтении заголовка ответа.")
             return None
+        
+        if header[0] != RESPONSE_START_BYTE or header[1] != self.address:
+            print("ОШИБКА: Неверный заголовок ответа.")
+            return None
+
+        data_len = header[5]
+        bytes_to_read = data_len + 1 # Данные + контрольная сумма
+        body = self.ser.read(bytes_to_read)
+
+        if not body or len(body) < bytes_to_read:
+            print(f"ОШИБКА: Таймаут при чтении тела ответа. Ожидалось {bytes_to_read}, получено {len(body)}.")
+            return None
+
+        response = header + body
         print_hex(response, "<- Получено: ")
-        if response[0] != RESPONSE_START_BYTE or response[1] != self.address or (sum(response) & 0xFF) != 0xFF:
-            print("ОШИБКА: Неверный заголовок или контрольная сумма ответа.")
+        
+        if (sum(response) & 0xFF) != 0xFF:
+            print("ОШИБКА: Неверная контрольная сумма ответа.")
             return None
         return response[6:-1]
-
-# 5. Класс для работы через TCP/IP
-# Реализует транспортный уровень для подключения по сети (например, через GSM-модем)
 
 class TEM104_TCP_Client(TEM104_Base_Client):
     """Реализация транспортного уровня для сети TCP/IP."""
@@ -319,13 +353,33 @@ class TEM104_TCP_Client(TEM104_Base_Client):
         try:
             print_hex(packet, "-> Отправка: ")
             self.sock.sendall(packet)
-            response = self.sock.recv(270)
-            if not response:
-                print("ОШИБКА: Счетчик не ответил (получен пустой ответ).")
+            
+            # Улучшенная логика чтения ответа для TCP
+            header = self.sock.recv(6)
+            if not header or len(header) < 6:
+                print("ОШИБКА: Таймаут при чтении заголовка ответа.")
                 return None
+
+            if header[0] != RESPONSE_START_BYTE or header[1] != self.address:
+                print("ОШИБКА: Неверный заголовок ответа.")
+                return None
+            
+            data_len = header[5]
+            bytes_to_read = data_len + 1
+            body = b''
+            # Цикл для гарантированного чтения всего тела пакета
+            while len(body) < bytes_to_read:
+                chunk = self.sock.recv(bytes_to_read - len(body))
+                if not chunk:
+                    # Соединение разорвано до получения всех данных
+                    raise ConnectionError("Соединение разорвано во время чтения тела ответа.")
+                body += chunk
+
+            response = header + body
             print_hex(response, "<- Получено: ")
-            if response[0] != RESPONSE_START_BYTE or response[1] != self.address or (sum(response) & 0xFF) != 0xFF:
-                print("ОШИБКА: Неверный заголовок или контрольная сумма ответа.")
+
+            if (sum(response) & 0xFF) != 0xFF:
+                print("ОШИБКА: Неверная контрольная сумма ответа.")
                 return None
             return response[6:-1]
         except socket.timeout:
@@ -336,9 +390,7 @@ class TEM104_TCP_Client(TEM104_Base_Client):
             self.disconnect()
             return None
 
-# 6. Главная функция и запуск
-# Запускает интерактивное меню, создает клиента, опрашивает счетчик и выводит данные
-
+# --- ГЛАВНЫЙ БЛОК ЗАПУСКА С ИНТЕРАКТИВНЫМ МЕНЮ ---
 def main():
     """Основная функция, запускающая интерактивное меню для пользователя."""
     print("--- Утилита для опроса счетчиков ТЭМ-104 ---")
