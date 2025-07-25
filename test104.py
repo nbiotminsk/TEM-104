@@ -4,6 +4,7 @@ import serial
 import time
 import struct
 from typing import Optional, Literal
+import sys
 
 # --- КОНСТАНТЫ ПРОТОКОЛА ---
 REQUEST_START_BYTE = 0x55
@@ -20,7 +21,9 @@ ProtocolType = Literal['ARVAS_LEGACY', 'ARVAS_LEGACY_1', 'TESMART', 'ARVAS_M', '
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def print_hex(data: bytes or bytearray, prefix: str = ""):
-    """Удобная функция для печати байт в HEX-формате."""
+    """Удобная функция для печати байт в HEX-формате. Не выводит в GUI."""
+    if hasattr(sys.stdout, 'text_widget'):
+        return
     print(f"{prefix}{' '.join(f'{b:02X}' for b in data)}")
 
 def bcd_to_int(bcd_byte: int) -> int:
@@ -68,131 +71,136 @@ class TEM104_Base_Client:
         return None
 
     def read_all_data(self):
+        """
+        Опрос счетчика и возврат основных данных (Q, M1, T1, T2, G1, T_nar) в виде словаря.
+        """
         if not self.protocol_type:
             self.protocol_type = self.auto_detect_protocol()
             if not self.protocol_type:
                 raise RuntimeError("Не удалось определить протокол. Укажите его вручную.")
-        
-        print(f"\nИспользуется протокол: {self.protocol_type}")
         time.sleep(0.5)
-
-        # Маршрутизатор: вызываем нужный метод для определенного протокола
-        if self.protocol_type == 'ARVAS_M1': self._read_arvas_m1_data()
-        elif self.protocol_type == 'ARVAS_M': self._read_arvas_m_data()
-        elif self.protocol_type == 'ARVAS_LEGACY_1': self._read_arvas_legacy_1_data()
-        elif self.protocol_type == 'ARVAS_LEGACY': self._read_arvas_legacy_data()
-        elif self.protocol_type == 'TESMART': self._read_tesmart_data()
+        if self.protocol_type == 'ARVAS_M1': return self._get_arvas_m1_data()
+        elif self.protocol_type == 'ARVAS_M': return self._get_arvas_m_data()
+        elif self.protocol_type == 'ARVAS_LEGACY_1': return self._get_arvas_legacy_1_data()
+        elif self.protocol_type == 'ARVAS_LEGACY': return self._get_arvas_legacy_data()
+        elif self.protocol_type == 'TESMART': return self._get_tesmart_data()
         else:
-            print(f"Логика чтения для {self.protocol_type} не реализована.")
-    
-    # --- БЛОКИ ЧТЕНИЯ ДАННЫХ ДЛЯ КАЖДОГО ПРОТОКОЛА ---
+            raise NotImplementedError(f"Логика чтения для {self.protocol_type} не реализована.")
 
-    def _read_arvas_m1_data(self):
-        """
-        Протокол: ARVAS_M1 (ТЭМ-104М-1)
-        Источник: TEM-104M1_PO_v_1_1.pdf
-        """
-        print("\n--- Чтение данных (протокол ARVAS_M1) ---")
-        # Время: команда 0F02, адрес 0x00 (стр. 15)
-        self._read_rtc_decimal()
-        time.sleep(0.5)
-        # Итоги: команда 0F01, базовый адрес 0x0180 (стр. 10, 14)
-        self._read_totals(CMD_READ_CONFIG, 0x0180, {'h_v': 0x08, 'h_m': 0x0C, 'h_q': 0x10, 'i_v': 0x18, 'i_m': 0x1C, 'i_q': 0x20})
-        time.sleep(0.5)
-        # Мгновенные: команда 0C01, базовый адрес 0x4000 (стр. 15)
-        self._read_instantaneous(0x4000, {'t': 0x00, 'pwr': 0x28}, num_temps=2)
+    # --- Методы для возврата данных по каждому протоколу ---
+    def _get_arvas_m1_data(self):
+        data = {}
+        # Итоги
+        addr_h, addr_l = (0x0180 >> 8) & 0xFF, 0x0180 & 0xFF
+        packet = self._create_packet(CMD_GROUP_READ_MEM, CMD_READ_CONFIG, data=bytearray([addr_h, addr_l, 0xFF]))
+        payload = self._send_and_receive(packet)
+        if payload:
+            try:
+                data['Q'] = struct.unpack('>f', payload[0x20:0x24])[0] + struct.unpack('>L', payload[0x10:0x14])[0]
+                data['M1'] = struct.unpack('>f', payload[0x1C:0x20])[0] + struct.unpack('>L', payload[0x0C:0x10])[0]
+                data['T_nar'] = struct.unpack('>L', payload[0x30:0x34])[0]
+            except Exception: pass
+        # Мгновенные
+        addr_h, addr_l = (0x4000 >> 8) & 0xFF, 0x4000 & 0xFF
+        packet = self._create_packet(CMD_GROUP_READ_RAM, CMD_READ_RAM, data=bytearray([addr_h, addr_l, 0xFF]))
+        payload = self._send_and_receive(packet)
+        if payload:
+            try:
+                data['T1'] = struct.unpack('>f', payload[0x00:0x04])[0]
+                data['T2'] = struct.unpack('>f', payload[0x04:0x08])[0]
+                data['G1'] = struct.unpack('>f', payload[0x20:0x24])[0]
+            except Exception: pass
+        return data
 
-    def _read_arvas_m_data(self):
-        """
-        Протокол: ARVAS_M (ТЭМ-104М)
-        Источник: TEM104M_PO_v1-3.pdf
-        """
-        print("\n--- Чтение данных (протокол ARVAS_M) ---")
-        # Время: команда 0F02, адрес 0x00 (стр. 15)
-        self._read_rtc_decimal()
-        time.sleep(0.5)
-        # Итоги: команда 0F01, базовый адрес 0x0800 (стр. 10, 14)
-        self._read_totals(CMD_READ_CONFIG, 0x0800, {'h_v': 0x08, 'h_m': 0x18, 'h_q': 0x28, 'i_v': 0x48, 'i_m': 0x58, 'i_q': 0x68})
-        time.sleep(0.5)
-        # Мгновенные: команда 0C01, базовый адрес 0x0000 (стр. 15)
-        self._read_instantaneous(0x0000, {'t': 0x00, 'pwr': 0x60}, num_temps=4)
+    def _get_arvas_m_data(self):
+        data = {}
+        addr_h, addr_l = (0x0800 >> 8) & 0xFF, 0x0800 & 0xFF
+        packet = self._create_packet(CMD_GROUP_READ_MEM, CMD_READ_CONFIG, data=bytearray([addr_h, addr_l, 0xFF]))
+        payload = self._send_and_receive(packet)
+        if payload:
+            try:
+                data['Q'] = struct.unpack('>f', payload[0x68:0x6C])[0] + struct.unpack('>L', payload[0x28:0x2C])[0]
+                data['M1'] = struct.unpack('>f', payload[0x58:0x5C])[0] + struct.unpack('>L', payload[0x18:0x1C])[0]
+                data['T_nar'] = struct.unpack('>L', payload[0xA0:0xA4])[0]
+            except Exception: pass
+        addr_h, addr_l = (0x0000 >> 8) & 0xFF, 0x0000 & 0xFF
+        packet = self._create_packet(CMD_GROUP_READ_RAM, CMD_READ_RAM, data=bytearray([addr_h, addr_l, 0xFF]))
+        payload = self._send_and_receive(packet)
+        if payload:
+            try:
+                data['T1'] = struct.unpack('>f', payload[0x00:0x04])[0]
+                data['T2'] = struct.unpack('>f', payload[0x04:0x08])[0]
+                data['G1'] = struct.unpack('>f', payload[0x40:0x44])[0]
+            except Exception: pass
+        return data
 
-    def _read_arvas_legacy_1_data(self):
-        """
-        Протокол: ARVAS_LEGACY_1 (ТЭМ-104-1)
-        Источник: tem-104-1_po.pdf
-        """
-        print("\n--- Чтение данных (протокол ARVAS_LEGACY_1) ---")
-        # Время: команда 0F02, адрес 0x00 (стр. 11)
-        self._read_rtc_bcd()
-        time.sleep(0.5)
-        # Итоги: команда 0F01, базовый адрес 0x0100 (стр. 10, параметр VH на 0x0144)
-        self._read_totals(CMD_READ_CONFIG, 0x0100, {'h_v': 0x44, 'i_v': 0x48, 'h_m': 0x4C, 'i_m': 0x50, 'h_q': 0x54, 'i_q': 0x58})
-        time.sleep(0.5)
-        # Мгновенные: команда 0C01, базовый адрес 0x00B8 (стр. 12, параметр tmp на 0x0C0)
-        self._read_instantaneous(0x00B8, {'t': 0x08, 'pwr': -1}, num_temps=2)
+    def _get_arvas_legacy_1_data(self):
+        data = {}
+        addr_h, addr_l = (0x0100 >> 8) & 0xFF, 0x0100 & 0xFF
+        packet = self._create_packet(CMD_GROUP_READ_MEM, CMD_READ_CONFIG, data=bytearray([addr_h, addr_l, 0xFF]))
+        payload = self._send_and_receive(packet)
+        if payload:
+            try:
+                data['Q'] = struct.unpack('>f', payload[0x58:0x5C])[0] + struct.unpack('>L', payload[0x54:0x58])[0]
+                data['M1'] = struct.unpack('>f', payload[0x50:0x54])[0] + struct.unpack('>L', payload[0x4C:0x50])[0]
+                data['T_nar'] = struct.unpack('>L', payload[0x60:0x64])[0]
+            except Exception: pass
+        addr_h, addr_l = (0x00B8 >> 8) & 0xFF, 0x00B8 & 0xFF
+        packet = self._create_packet(CMD_GROUP_READ_RAM, CMD_READ_RAM, data=bytearray([addr_h, addr_l, 0xFF]))
+        payload = self._send_and_receive(packet)
+        if payload:
+            try:
+                data['T1'] = struct.unpack('>f', payload[0x08:0x0C])[0]
+                data['T2'] = struct.unpack('>f', payload[0x0C:0x10])[0]
+                data['G1'] = struct.unpack('>f', payload[0x00:0x04])[0]
+            except Exception: pass
+        return data
 
-    def _read_arvas_legacy_data(self):
-        """
-        Протокол: ARVAS_LEGACY (старый ТЭМ-104)
-        Источник: TEM-104_PO.pdf
-        """
-        print("\n--- Чтение данных (протокол ARVAS_LEGACY) ---")
-        # Время: команда 0F02, адрес 0x10 (стр. 12)
-        self._read_rtc_bcd()
-        time.sleep(0.5)
-        # Итоги: команда 0F01, базовый адрес 0x0200 (стр. 10, структура SysInt_copy1)
-        self._read_totals(CMD_READ_CONFIG, 0x0200, {'h_v': 0x38, 'i_v': 0x08, 'h_m': 0x48, 'i_m': 0x18, 'h_q': 0x58, 'i_q': 0x28})
-        time.sleep(0.5)
-        # Мгновенные: команда 0C01, базовый адрес 0x2200 (стр. 13)
-        self._read_instantaneous(0x2200, {'t': 0x00, 'pwr': 0x60}, num_temps=4)
-        
-    def _read_tesmart_data(self):
-        """
-        Протокол: TESMART (ТЭМ-104 ТЭСМАРТ)
-        Источник: tem-104(tesmart)_po.pdf
-        """
-        print("\n--- Чтение данных (протокол ТЭСМАРТ) ---")
-        # В этой модели все данные лежат в одном большом блоке памяти таймера 2К.
-        # Читаем его по частям и собираем в единый payload.
+    def _get_arvas_legacy_data(self):
+        data = {}
+        addr_h, addr_l = (0x0200 >> 8) & 0xFF, 0x0200 & 0xFF
+        packet = self._create_packet(CMD_GROUP_READ_MEM, CMD_READ_CONFIG, data=bytearray([addr_h, addr_l, 0xFF]))
+        payload = self._send_and_receive(packet)
+        if payload:
+            try:
+                data['Q'] = struct.unpack('>f', payload[0x28:0x2C])[0] + struct.unpack('>L', payload[0x58:0x5C])[0]
+                data['M1'] = struct.unpack('>f', payload[0x18:0x1C])[0] + struct.unpack('>L', payload[0x48:0x4C])[0]
+                data['T_nar'] = struct.unpack('>L', payload[0x6C:0x70])[0]
+            except Exception: pass
+        addr_h, addr_l = (0x2200 >> 8) & 0xFF, 0x2200 & 0xFF
+        packet = self._create_packet(CMD_GROUP_READ_RAM, CMD_READ_RAM, data=bytearray([addr_h, addr_l, 0xFF]))
+        payload = self._send_and_receive(packet)
+        if payload:
+            try:
+                data['T1'] = struct.unpack('>f', payload[0x00:0x04])[0]
+                data['T2'] = struct.unpack('>f', payload[0x04:0x08])[0]
+                data['G1'] = struct.unpack('>f', payload[0x40:0x44])[0]
+            except Exception: pass
+        return data
+
+    def _get_tesmart_data(self):
+        data = {}
         full_payload = bytearray()
         for i in range(5):
-            addr_h, addr_l = i, 0x00
+            addr_h, addr_l = ((i * 0x100) >> 8) & 0xFF, (i * 0x100) & 0xFF
             packet = self._create_packet(CMD_GROUP_READ_MEM, CMD_READ_CONFIG, data=bytearray([addr_h, addr_l, 0xFF]))
             payload_part = self._send_and_receive(packet)
             if not payload_part:
-                print("ОШИБКА: не удалось прочитать все блоки памяти ТЭСМАРТ.")
-                return
+                continue
             full_payload.extend(payload_part)
-            time.sleep(0.5)
-        self._parse_tesmart_payload(full_payload)
-
-    def _parse_tesmart_payload(self, payload: bytes):
-        """Разбор единого блока данных для протокола ТЭСМАРТ."""
+            time.sleep(0.2)
         try:
-            print("\n--- Разбор данных ТЭСМАРТ ---")
-            # Время: адрес 0x0482 (стр. 8)
-            ss, mm, hh, dd, MM, YY = (bcd_to_int(payload[a]) for a in range(0x482, 0x488))
-            print(f"Текущее время: 20{YY:02d}-{MM:02d}-{dd:02d} {hh:02d}:{mm:02d}:{ss:02d}")
-            
-            # Коэффициенты для расчета итогов: адрес 0x02FA (стр. 8, 11)
-            comma_v = payload[0x02FA:0x0300]
-            k_v, k_q = ([self._get_tesmart_coeff(c, 'volume') for c in comma_v], [self._get_tesmart_coeff(c, 'energy') for c in comma_v])
-            
-            # Итоги: базовый адрес 0x0300 (стр. 8)
-            i_vol, h_vol = struct.unpack('>6f', payload[0x0300:0x0318]), struct.unpack('>6L', payload[0x0318:0x0330])
-            i_mass, h_mass = struct.unpack('>6f', payload[0x0330:0x0348]), struct.unpack('>6L', payload[0x0348:0x0360])
-            i_energy, h_energy = struct.unpack('>6f', payload[0x0360:0x0378]), struct.unpack('>6L', payload[0x0378:0x0390])
-            
-            total_v = [(h + i) / k for h, i, k in zip(h_vol, i_vol, k_v)]
-            total_m = [(h + i) / k for h, i, k in zip(h_mass, i_mass, k_v)]
-            total_q = [(h + i) / k for h, i, k in zip(h_energy, i_energy, k_q)]
-
-            print("\nНакопленные итоги:")
-            print(f"  Объем (V, м³): {[f'{v:.3f}' for v in total_v]}")
-            print(f"  Масса (M, т): {[f'{m:.3f}' for m in total_m]}")
-            print(f"  Энергия (Q, МВт*ч): {[f'{q:.4f}' for q in total_q]}")
-        except (struct.error, IndexError) as e: print(f"ОШИБКА разбора данных ТЭСМАРТ: {e}")
+            k_v = self._get_tesmart_coeff(full_payload[0x02FA], 'volume')
+            k_q = self._get_tesmart_coeff(full_payload[0x02FA], 'energy')
+            data['Q'] = (struct.unpack('>L', full_payload[0x0378:0x037C])[0] + struct.unpack('>f', full_payload[0x0360:0x0364])[0]) / k_q
+            data['M1'] = (struct.unpack('>L', full_payload[0x0348:0x034C])[0] + struct.unpack('>f', full_payload[0x0330:0x0334])[0]) / k_v
+            data['T_nar'] = struct.unpack('>L', full_payload[0x0404:0x0408])[0]
+            data['T1'] = struct.unpack('>f', full_payload[0x0200:0x0204])[0]
+            data['T2'] = struct.unpack('>f', full_payload[0x0204:0x0208])[0]
+            data['G1'] = struct.unpack('>f', full_payload[0x0288:0x028C])[0]
+        except Exception:
+            pass
+        return data
 
     # --- УНИФИЦИРОВАННЫЕ МЕТОДЫ ЧТЕНИЯ ---
 
@@ -406,7 +414,10 @@ def main():
 
         if client:
             client.connect()
-            client.read_all_data()
+            data = client.read_all_data()
+            print("\n--- Результаты опроса ---")
+            for key, value in data.items():
+                print(f"{key}: {value}")
 
     except (ValueError, TypeError):
         print("\nОшибка: введено некорректное числовое значение. Пожалуйста, перезапустите программу.")
