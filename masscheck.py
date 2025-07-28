@@ -308,63 +308,86 @@ class TEM104_TCP_Client(TEM104_Base_Client):
             return None
 
 # --- ЛОГИКА МАССОВОГО СБОРА ДАННЫХ ---
+import logging
+import concurrent.futures
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[logging.FileHandler("masscheck.log", encoding='utf-8'), logging.StreamHandler()]
+)
+
+def poll_device(device: dict):
+    name = device.get("name", "N/A")
+    ip = device.get("ip")
+
+    if not ip:
+        logging.error(f"--- Объект: {name} ({ip}) ---")
+        logging.error("  Статус: ОШИБКА (IP-адрес не указан)")
+        return
+
+    client = None
+    try:
+        client = TEM104_TCP_Client(host=ip, port=TCP_PORT, address=METER_ADDRESS, timeout=5)
+        client.connect()
+
+        data = client.get_specific_data()
+
+        logging.info(f"--- Объект: {name} ({ip}) ---")
+        logging.info(f"  Статус: ОНЛАЙН | Протокол: {client.protocol_type} | IP: {ip} | Адрес счетчика: {client.address}")
+        logging.info(f"    Время счетчика:   {data.get('Time', '---')}")
+        logging.info(f"    Q (Энергия):      {data.get('Q', '---'):.3f}")
+        logging.info(f"    M1 (Масса 1):     {data.get('M1', '---'):.3f}")
+        logging.info(f"    V1 (Объем 1):     {data.get('V1', '---'):.3f}")
+        logging.info(f"    V2 (Объем 2):     {data.get('V2', '---'):.3f}")
+        logging.info(f"    T1 (Темп. 1):     {data.get('T1', '---'):.2f} °C")
+        logging.info(f"    T2 (Темп. 2):     {data.get('T2', '---'):.2f} °C")
+        logging.info(f"    G1 (Расход 1):    {data.get('G1', '---'):.3f} м³/ч")
+        logging.info(f"    G2 (Расход 2):    {data.get('G2', '---'):.3f} м³/ч")
+        t_nar = data.get('T_nar', 0)
+        logging.info(f"    T_нар (Наработка):  {int(t_nar / 3600)} ч.")
+
+    except (ConnectionError, ValueError, IOError, NotImplementedError) as e:
+        logging.error(f"--- Объект: {name} ({ip}) ---")
+        logging.error(f"  Статус: ОШИБКА | {e} | IP: {ip} | Адрес счетчика: {METER_ADDRESS}")
+    except Exception as e:
+        logging.critical(f"--- Объект: {name} ({ip}) ---")
+        logging.critical(f"  Статус: КРИТИЧЕСКАЯ ОШИБКА | {e} | IP: {ip} | Адрес счетчика: {METER_ADDRESS}")
+    finally:
+        if client:
+            client.disconnect()
+
 def run_data_harvesting():
     """
     Основная функция, которая читает JSON, опрашивает каждый
-    счетчик и выводит запрошенные данные.
+    счетчик параллельно и выводит запрошенные данные с логированием.
     """
     if not os.path.exists(JSON_FILENAME):
-        print(f"ОШИБКА: Файл '{JSON_FILENAME}' не найден. Создайте его.")
+        logging.error(f"Файл '{JSON_FILENAME}' не найден. Создайте его.")
         return
     try:
         with open(JSON_FILENAME, 'r', encoding='utf-8') as f:
             devices = json.load(f)
-        if not isinstance(devices, list): raise ValueError("JSON должен быть списком.")
+        if not isinstance(devices, list):
+            raise ValueError("JSON должен быть списком.")
+        if not devices:
+            logging.warning("Список устройств пуст.")
+            return
     except (json.JSONDecodeError, ValueError) as e:
-        print(f"ОШИБКА: Некорректный формат файла '{JSON_FILENAME}'. {e}")
+        logging.error(f"Некорректный формат файла '{JSON_FILENAME}'. {e}")
         return
 
-    print("--- ЗАПУСК МАССОВОГО СБОРА ДАННЫХ ---")
-    print(f"TCP-порт: {TCP_PORT}, Адрес счетчика: {METER_ADDRESS}\n")
-    
-    for device in devices:
-        name = device.get("name", "N/A")
-        ip = device.get("ip")
-        
-        print(f"--- Объект: {name} ({ip}) ---")
+    logging.info("--- ЗАПУСК МАССОВОГО СБОРА ДАННЫХ ---")
+    logging.info(f"TCP-порт: {TCP_PORT}, Адрес счетчика: {METER_ADDRESS}")
 
-        if not ip:
-            print("  Статус: ОШИБКА (IP-адрес не указан)\n")
-            continue
-            
-        client = None
-        try:
-            client = TEM104_TCP_Client(host=ip, port=TCP_PORT, address=METER_ADDRESS, timeout=5)
-            client.connect()
-            
-            data = client.get_specific_data()
-            
-            # Форматированный вывод
-            print(f"  Статус: ОНЛАЙН | Протокол: {client.protocol_type}")
-            print(f"    Время счетчика:   {data.get('Time', '---')}")
-            print(f"    Q (Энергия):      {data.get('Q', '---'):.3f}")
-            print(f"    M1 (Масса 1):     {data.get('M1', '---'):.3f}")
-            print(f"    V1 (Объем 1):     {data.get('V1', '---'):.3f}")
-            print(f"    V2 (Объем 2):     {data.get('V2', '---'):.3f}")
-            print(f"    T1 (Темп. 1):     {data.get('T1', '---'):.2f} °C")
-            print(f"    T2 (Темп. 2):     {data.get('T2', '---'):.2f} °C")
-            print(f"    G1 (Расход 1):    {data.get('G1', '---'):.3f} м³/ч")
-            print(f"    G2 (Расход 2):    {data.get('G2', '---'):.3f} м³/ч")
-            print(f"    T_нар (Наработка):  {int(data.get('T_nar', 0) / 3600)} ч.\n")
-
-        except (ConnectionError, ValueError, IOError, NotImplementedError) as e:
-            print(f"  Статус: ОШИБКА | {e}\n")
-        except Exception as e:
-            print(f"  Статус: КРИТИЧЕСКАЯ ОШИБКА | {e}\n")
-        finally:
-            if client: client.disconnect()
-        
-        time.sleep(0.5)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(poll_device, device) for device in devices]
+        for future in concurrent.futures.as_completed(futures):
+            # Можно обработать результаты или исключения, если нужно
+            try:
+                future.result()
+            except Exception as e:
+                logging.error(f"Ошибка в потоке: {e}")
 
 if __name__ == "__main__":
     run_data_harvesting()
