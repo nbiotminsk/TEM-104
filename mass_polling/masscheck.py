@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
+import os
 import socket
 import json
-import os
 import time
 import struct
 from typing import Optional, Literal, Dict, Any
+
+JSON_FILENAME = os.path.join(os.path.dirname(__file__), "ip_list.json")
 
 # --- КОНСТАНТЫ ---
 # Глобальные настройки для массового опроса
 TCP_PORT = 5009
 METER_ADDRESS = 1
-JSON_FILENAME = "ip_list.json"
 
 # Константы протокола (неизменны)
 REQUEST_START_BYTE = 0x55
@@ -247,10 +248,20 @@ class TEM104_Base_Client:
         return self._send_and_receive(packet)
 
     def _unpack_float(self, payload, offset):
-        return struct.unpack('>f', payload[offset:offset+4])[0] if payload and len(payload) >= offset + 4 else 0.0
+        try:
+            if payload and len(payload) >= offset + 4:
+                return struct.unpack('>f', payload[offset:offset+4])[0]
+        except struct.error:
+            pass
+        return 0.0
 
     def _unpack_long(self, payload, offset):
-        return struct.unpack('>L', payload[offset:offset+4])[0] if payload and len(payload) >= offset + 4 else 0
+        try:
+            if payload and len(payload) >= offset + 4:
+                return struct.unpack('>L', payload[offset:offset+4])[0]
+        except struct.error:
+            pass
+        return 0
 
     def _get_tesmart_coeff(self, comma_val: int, param_type: str) -> int:
         coeffs = {'energy': {6: 100000, 5: 10000, 4: 1000, 3: 100, 2: 10}, 'volume': {5: 1000, 4: 100, 3: 10}}

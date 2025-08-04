@@ -1,0 +1,302 @@
+Опрос счетчиков ТЭМ-104 на Python: Полное руководство
+Введение
+Это руководство научит вас, как с помощью языка Python получать данные с теплосчетчиков ТЭМ-104. Мы создадим универсальный скрипт, который сможет определять модель счетчика и считывать с него текущие и накопленные показания. Мы будем двигаться от простого к сложному, объясняя каждый шаг.
+Наша цель: Написать класс на Python, который можно будет легко использовать в любых ваших проектах для сбора данных с этих приборов.
+Что нам понадобится:
+    • Python 3.
+    • Библиотека pyserial для работы с COM-портом. Установить ее можно командой:
+pip install pyserial
+
+    • Преобразователь интерфейсов USB-RS485/RS232 для подключения компьютера к счетчику.
+Глава 1. Фундамент: Класс для общения
+Чтобы не дублировать код, создадим основной класс TemDriver, который будет отвечать за низкоуровневое общение: отправку байтов в порт, получение ответа и проверку его целостности.
+Шаг 1: Структура класса
+Этот класс будет нашим "переводчиком". Он будет брать наши команды, упаковывать их в "конверт" (пакет), который понятен счетчику, и распаковывать его ответы.
+# -*- coding: utf-8 -*-
+import serial
+import time
+import struct
+from datetime import datetime
+
+class TemDriver:
+    """
+    Базовый класс для работы с протоколом ТЭМ-104.
+    Отвечает за подключение, формирование и отправку пакетов,
+    а также за проверку ответов.
+    """
+    def __init__(self, port, baudrate=9600, timeout=2):
+        """Инициализация драйвера."""
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.ser = None
+        print(f"Драйвер инициализирован для порта {self.port} со скоростью {self.baudrate}")
+
+    def connect(self):
+        """Устанавливает соединение с COM-портом."""
+        try:
+            self.ser = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+            print("Соединение с портом установлено.")
+            return True
+        except serial.SerialException as e:
+            print(f"Ошибка: Не удалось подключиться к порту {self.port}. {e}")
+            return False
+
+    def disconnect(self):
+        """Закрывает соединение с COM-портом."""
+        if self.ser and self.ser.is_open:
+            self.ser.close()
+            print("Соединение с портом разорвано.")
+
+    def _calculate_checksum(self, packet):
+        """Приватный метод для расчета контрольной суммы."""
+        return (~sum(packet) & 255)
+
+    def _create_request(self, address, cgrp, cmd, data=None):
+        """Приватный метод для создания пакета запроса."""
+        if data is None:
+            data = []
+        
+        inv_address = ~address & 255
+        
+        packet = [0x55, address, inv_address, cgrp, cmd, len(data)]
+        packet.extend(data)
+        
+        packet.append(self._calculate_checksum(packet))
+        return bytearray(packet)
+
+    def _send_and_receive(self, request_packet):
+        """
+        Отправляет пакет и получает ответ.
+        Выполняет базовую проверку ответа (стартовый байт, КС).
+        """
+        if not self.ser or not self.ser.is_open:
+            print("Ошибка: Порт не открыт. Сначала вызовите connect().")
+            return None
+
+        self.ser.flushInput()  # Очищаем буфер перед отправкой
+        self.ser.write(request_packet)
+        # print(f"-> Отправлено: {' '.join(f'{b:02X}' for b in request_packet)}") # Для отладки
+
+        response_bytes = self.ser.read(262) # Читаем с запасом (макс. ответ 256 данных + обвязка)
+
+        if not response_bytes:
+            # print("<- Ответ: Устройство не ответило.") # Для отладки
+            return None
+
+        # print(f"<- Получено: {' '.join(f'{b:02X}' for b in response_bytes)}") # Для отладки
+
+        # Проверка базовой корректности ответа
+        if response_bytes[0] != 0xAA:
+            print("Ошибка ответа: неверный стартовый байт.")
+            return None
+
+        if self._calculate_checksum(response_bytes[:-1]) != response_bytes[-1]:
+            print("Ошибка ответа: неверная контрольная сумма.")
+            return None
+            
+        length = response_bytes[5]
+        data = response_bytes[6:-1]
+
+        if len(data) != length:
+            print("Ошибка ответа: длина данных не совпадает с заявленной.")
+            return None
+
+        return data
+
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.disconnect()
+
+
+Что мы сделали?
+    • Создали класс TemDriver.
+    • Методы connect и disconnect управляют COM-портом.
+    • _calculate_checksum и _create_request — наши "упаковщики" пакетов.
+    • _send_and_receive — главный метод для общения. Он отправляет запрос, ждет ответ и проверяет, что он не "битый".
+    • Добавили __enter__ и __exit__ — это позволяет использовать наш класс в конструкции with, которая автоматически откроет и закроет порт.
+Глава 2. Стратегия: Один скрипт для разных моделей
+Как мы знаем, протоколы старых (ТЭМ-104) и новых (ТЭМ-104М) счетчиков отличаются картами памяти. Чтобы наш код был чистым, применим шаблон проектирования "Стратегия".
+    1. Контекст: Наш TemDriver. Он умеет общаться, но не знает, что значат данные.
+    2. Стратегия: Специальные классы-протоколы (Tem104Protocol, Tem104MProtocol), которые знают, по каким адресам лежат нужные нам параметры и как их расшифровать.
+Шаг 2: Идентификация и выбор стратегии
+Добавим в наш TemDriver метод, который определит модель прибора и поможет нам выбрать нужную "стратегию".
+# Добавьте этот код внутрь класса TemDriver из предыдущего шага
+
+def identify_device(self, address):
+    """
+    Отправляет команду идентификации (00 00) и возвращает модель.
+    """
+    print(f"\n[Шаг 1] Идентификация устройства с адресом {address}...")
+    request = self._create_request(address, 0x00, 0x00)
+    response_data = self._send_and_receive(request)
+
+    if response_data:
+        device_name = response_data.decode('ascii', errors='ignore')
+        print(f"Устройство ответило: {device_name}")
+        return device_name
+    else:
+        print("Устройство не ответило на команду идентификации.")
+        return None
+
+Теперь мы можем узнать, с кем говорим. На основе ответа ("TEM-104", "TEM-104M-1" и т.д.) мы будем решать, какой класс-протокол использовать.
+Глава 3. Читаем данные с ТЭМ-104М
+Давайте реализуем "стратегию" для современных счетчиков ТЭМ-104М. Их протокол более структурирован.
+Шаг 3: Класс-протокол для ТЭМ-104М
+Этот класс будет использовать наш TemDriver для отправки команд, но сам будет отвечать за их содержимое и за парсинг данных.
+class Tem104MProtocol:
+    """
+    Класс-"стратегия" для работы с протоколом ТЭМ-104М.
+    Знает адреса и форматы данных для этой линейки приборов.
+    """
+    def __init__(self, driver, address):
+        self.driver = driver
+        self.address = address
+
+    def _bcd_to_dec(self, bcd):
+        """Конвертирует байт BCD в обычное число."""
+        return (bcd >> 4) * 10 + (bcd & 0x0F)
+
+    def read_datetime(self):
+        """Читает текущие дату и время со счетчика."""
+        print(f"\n[Шаг 2] Чтение даты и времени...")
+        # Команда 0F02, читаем с адреса 0, 7 байт
+        request = self.driver._create_request(self.address, 0x0F, 0x02, [0x00, 0x07])
+        data = self.driver._send_and_receive(request)
+
+        if data and len(data) == 7:
+            sec = self._bcd_to_dec(data[0])
+            minute = self._bcd_to_dec(data[1])
+            hour = self._bcd_to_dec(data[2])
+            day = self._bcd_to_dec(data[3])
+            month = self._bcd_to_dec(data[4])
+            year = 2000 + self._bcd_to_dec(data[5])
+            
+            dt = datetime(year, month, day, hour, minute, sec)
+            print(f"Время на приборе: {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+            return dt
+        print("Не удалось прочитать время.")
+        return None
+
+    def read_current_values(self):
+        """Читает мгновенные значения (ОЗУ)."""
+        print(f"\n[Шаг 3] Чтение текущих (мгновенных) значений...")
+        # Команда 0C01, читаем ОЗУ с адреса 0x0000, 116 байт
+        request = self.driver._create_request(self.address, 0x0C, 0x01, [0x00, 0x00, 116])
+        data = self.driver._send_and_receive(request)
+
+        if data:
+            # Данные хранятся как float (4 байта) в формате Big-Endian
+            # >f означает Big-Endian float
+            t1 = struct.unpack('>f', data[0:4])[0]
+            t2 = struct.unpack('>f', data[4:8])[0]
+            # ... и так далее по карте памяти
+            flow1 = struct.unpack('>f', data[64:68])[0]
+            power1 = struct.unpack('>f', data[96:100])[0]
+            
+            result = {
+                't1': round(t1, 2),
+                't2': round(t2, 2),
+                'flow1': round(flow1, 3),
+                'power1': round(power1, 4)
+            }
+            print("Текущие значения:")
+            for key, value in result.items():
+                print(f"  {key}: {value}")
+            return result
+        print("Не удалось прочитать текущие значения.")
+        return None
+        
+    def read_total_values(self):
+        """Читает накопленные итоговые значения."""
+        print(f"\n[Шаг 4] Чтение накопленных итогов...")
+        # Команда 0F01, читаем из области интеграторов (адрес 0x800), 352 байта
+        request = self.driver._create_request(self.address, 0x0F, 0x01, [0x08, 0x00, 0x00]) # 0x00 - запрос 256 байт
+        request2 = self.driver._create_request(self.address, 0x0F, 0x01, [0x09, 0x00, 96]) # 0x0900 = 0x0800 + 256
+        
+        data1 = self.driver._send_and_receive(request)
+        time.sleep(0.2)
+        data2 = self.driver._send_and_receive(request2)
+
+        if data1 and data2:
+            data = data1 + data2
+            # Целая часть V1 (long, 4 байта, big-endian)
+            v1_h = struct.unpack('>L', data[8:12])[0]
+            # Дробная часть V1 (float, 4 байта, big-endian)
+            v1_l = struct.unpack('>f', data[72:76])[0]
+            v1_total = v1_h + v1_l
+
+            # Целая часть Q1
+            q1_h = struct.unpack('>L', data[40:44])[0]
+            # Дробная часть Q1
+            q1_l = struct.unpack('>f', data[104:108])[0]
+            q1_total = q1_h + q1_l
+            
+            result = {
+                'V1_total': round(v1_total, 3),
+                'Q1_total': round(q1_total, 4)
+            }
+            print("Накопленные итоги:")
+            for key, value in result.items():
+                print(f"  {key}: {value}")
+            return result
+            
+        print("Не удалось прочитать накопленные итоги.")
+        return None
+
+
+Разбор полетов:
+    • read_datetime: Формирует команду 0F02 для чтения часов. Ответ парсит с помощью _bcd_to_dec.
+    • read_current_values: Формирует команду 0C01 для чтения ОЗУ. Для расшифровки чисел с плавающей точкой используется struct.unpack('>f', ...). > — это флаг, который говорит: "Внимание, байты идут в порядке Big-Endian!".
+    • read_total_values: Читает область памяти с накопленными итогами. Так как нам нужно прочитать больше 256 байт, мы делаем два запроса подряд со смещением. Итоги складываются из целой (long, >L) и дробной (float, >f) частей.
+Глава 4. Собираем все вместе
+Теперь у нас есть все кирпичики. Давайте напишем главный скрипт, который будет их использовать.
+def main():
+    # --- НАСТРОЙКИ ---
+    # Укажите ваш COM-порт и адрес прибора
+    PORT = 'COM3'  # Для Windows. Для Linux/macOS может быть '/dev/ttyUSB0'
+    DEVICE_ADDRESS = 1
+    
+    # Используем конструкцию 'with', чтобы порт закрылся автоматически
+    with TemDriver(port=PORT) as driver:
+        if not driver.ser:
+            return # Выходим, если не удалось подключиться
+
+        # 1. Идентифицируем устройство
+        device_name = driver.identify_device(DEVICE_ADDRESS)
+        
+        if not device_name:
+            print("\nПрограмма завершена. Не удалось связаться с устройством.")
+            return
+
+        # 2. Выбираем нужный протокол (стратегию)
+        if 'M' in device_name:
+            protocol = Tem104MProtocol(driver, DEVICE_ADDRESS)
+        else:
+            # Здесь должна быть реализация для старого протокола
+            print(f"Протокол для {device_name} не реализован в этом примере.")
+            return
+            
+        # 3. Последовательно опрашиваем данные
+        protocol.read_datetime()
+        protocol.read_current_values()
+        protocol.read_total_values()
+
+        print("\nОпрос успешно завершен!")
+
+
+if __name__ == "__main__":
+    main()
+
+
+Как запустить?
+    1. Сохраните все три блока кода (классы TemDriver, Tem104MProtocol и функцию main) в один файл, например tem_poller.py.
+    2. Измените PORT и DEVICE_ADDRESS в функции main на ваши.
+    3. Подключите счетчик к компьютеру через преобразователь.
+    4. Запустите скрипт из командной строки:
+python tem_poller.py
+
+Вы должны увидеть в консоли пошаговый отчет о том, как скрипт определяет модель вашего счетчика и считывает с него данные. Поздравляю, вы только что создали свою собственную систему опроса!
