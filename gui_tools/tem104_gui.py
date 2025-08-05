@@ -14,6 +14,9 @@ import os
 
 OBJECTS_FILE = "objects.json"
 
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core_library'))
 from test104 import TEM104_Serial_Client, TEM104_TCP_Client
 
 class RedirectText(io.StringIO):
