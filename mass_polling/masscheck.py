@@ -31,6 +31,12 @@ def bcd_to_int(bcd_byte: int) -> int:
     """Преобразует один байт BCD в integer."""
     return (bcd_byte >> 4) * 10 + (bcd_byte & 0x0F)
 
+def _format_value(value: Any, format_spec: str, default: str = '---') -> str:
+    """Safely formats a value if it's a number, otherwise returns a default string."""
+    if isinstance(value, (int, float)):
+        return format(value, format_spec)
+    return default
+
 # --- ЛОГИКА ПРОТОКОЛА И ТРАНСПОРТА ---
 class TEM104_Base_Client:
     """
@@ -358,15 +364,19 @@ def run_data_harvesting():
             # Форматированный вывод
             print(f"  Статус: ОНЛАЙН | Протокол: {client.protocol_type}")
             print(f"    Время счетчика:   {data.get('Time', '---')}")
-            print(f"    Q (Энергия):      {data.get('Q', '---'):.3f}")
-            print(f"    M1 (Масса 1):     {data.get('M1', '---'):.3f}")
-            print(f"    V1 (Объем 1):     {data.get('V1', '---'):.3f}")
-            print(f"    V2 (Объем 2):     {data.get('V2', '---'):.3f}")
-            print(f"    T1 (Темп. 1):     {data.get('T1', '---'):.2f} °C")
-            print(f"    T2 (Темп. 2):     {data.get('T2', '---'):.2f} °C")
-            print(f"    G1 (Расход 1):    {data.get('G1', '---'):.3f} м³/ч")
-            print(f"    G2 (Расход 2):    {data.get('G2', '---'):.3f} м³/ч")
-            print(f"    T_нар (Наработка):  {int(data.get('T_nar', 0) / 3600)} ч.\n")
+            print(f"    Q (Энергия):      {_format_value(data.get('Q'), '.3f')}")
+            print(f"    M1 (Масса 1):     {_format_value(data.get('M1'), '.3f')}")
+            print(f"    V1 (Объем 1):     {_format_value(data.get('V1'), '.3f')}")
+            print(f"    V2 (Объем 2):     {_format_value(data.get('V2'), '.3f')}")
+            print(f"    T1 (Темп. 1):     {_format_value(data.get('T1'), '.2f')} °C")
+            print(f"    T2 (Темп. 2):     {_format_value(data.get('T2'), '.2f')} °C")
+            print(f"    G1 (Расход 1):    {_format_value(data.get('G1'), '.3f')} м³/ч")
+            print(f"    G2 (Расход 2):    {_format_value(data.get('G2'), '.3f')} м³/ч")
+            t_nar_val = data.get('T_nar')
+            t_nar_hours = '---'
+            if isinstance(t_nar_val, (int, float)):
+                t_nar_hours = int(t_nar_val / 3600)
+            print(f"    T_нар (Наработка):  {t_nar_hours} ч.\n")
 
         except (ConnectionError, ValueError, IOError, NotImplementedError) as e:
             print(f"  Статус: ОШИБКА | {e}\n")
