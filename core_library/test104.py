@@ -288,9 +288,10 @@ class TEM104_Serial_Client(TEM104_Base_Client):
         try:
             print(f"Попытка подключения к {self.port} со скоростью {self.baudrate}...")
             self.ser = serial.Serial(port=self.port, baudrate=self.baudrate, timeout=self.timeout)
+            self.ser.reset_input_buffer()
+            self.ser.reset_output_buffer()
+            time.sleep(0.1)
             print("Порт успешно открыт.")
-        except serial.SerialException as e:
-            raise ConnectionError(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось открыть порт {self.port}. {e}")
 
     def disconnect(self):
         if self.ser and self.ser.is_open:

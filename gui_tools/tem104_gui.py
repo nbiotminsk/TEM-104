@@ -21,18 +21,7 @@ from core_library.test104 import TEM104_Serial_Client, TEM104_TCP_Client
 OBJECTS_FILE = "objects.json"
 
 
-class RedirectText(io.StringIO):
-    """Класс для перенаправления вывода print в текстовое поле tkinter."""
-    def __init__(self, text_widget):
-        super().__init__()
-        self.text_widget = text_widget
-    def write(self, s):
-        self.text_widget.configure(state='normal')
-        self.text_widget.insert(tk.END, s)
-        self.text_widget.see(tk.END)
-        self.text_widget.configure(state='disabled')
-    def flush(self):
-        pass
+
 
 
 class AddObjectDialog(tk.Toplevel):
@@ -105,21 +94,21 @@ class AddObjectDialog(tk.Toplevel):
         if not name:
             messagebox.showerror("Ошибка", "Введите имя объекта!")
             return
-        addr = self.widgets['entry_addr'].get().strip()
-        if not addr.isdigit():
-            messagebox.showerror("Ошибка", "Адрес должен быть числом!")
-            return
-        obj = {'name': name, 'type': self.type_var.get(), 'addr': int(addr)}
-        if self.type_var.get() == 'COM':
-            obj['com'] = self.widgets['entry_com'].get().strip()
-            obj['baud'] = int(self.widgets['entry_baud'].get().strip())
-        else:
-            obj['ip'] = self.widgets['entry_ip'].get().strip()
-            obj['port'] = int(self.widgets['entry_port'].get().strip())
-        self.parent.objects.append(obj)
-        self.parent.save_objects()
-        self.parent.update_object_list()
-        self.destroy()
+        try:
+            addr = int(self.widgets['entry_addr'].get().strip())
+            obj = {'name': name, 'type': self.type_var.get(), 'addr': addr}
+            if self.type_var.get() == 'COM':
+                obj['com'] = self.widgets['entry_com'].get().strip()
+                obj['baud'] = int(self.widgets['entry_baud'].get().strip())
+            else:
+                obj['ip'] = self.widgets['entry_ip'].get().strip()
+                obj['port'] = int(self.widgets['entry_port'].get().strip())
+            self.parent.objects.append(obj)
+            self.parent.save_objects()
+            self.parent.update_object_list()
+            self.destroy()
+        except ValueError:
+            messagebox.showerror("Ошибка", "Адрес, скорость и порт должны быть числами!")
 
 
 class TEM104GUI(tk.Tk):
@@ -269,9 +258,7 @@ class TEM104GUI(tk.Tk):
         """
         4. Опрос счетчика и вывод только ключевых параметров
         """
-        # Перенаправляем print в текстовое поле
-        old_stdout = sys.stdout
-        sys.stdout = RedirectText(self.widgets['text_output'])
+        output_lines = []
         try:
             addr = int(self.widgets['entry_addr'].get())
             if self.conn_type.get() == "COM":
@@ -285,19 +272,28 @@ class TEM104GUI(tk.Tk):
             client.connect()
             data = client.read_all_data()
             # Форматированный вывод только нужных параметров
-            print(f"  Статус: ОНЛАЙН | Протокол: {getattr(client, 'protocol_type', '---')}")
-            print(f"    Q (Энергия): {data.get('Q', '---'):.3f}")
-            print(f"    M1 (Масса):  {data.get('M1', '---'):.3f}")
-            print(f"    T1 (Темп.):  {data.get('T1', '---'):.2f} °C")
-            print(f"    T2 (Темп.):  {data.get('T2', '---'):.2f} °C")
-            print(f"    G1 (Расход): {data.get('G1', '---'):.3f} м³/ч")
-            print(f"    T_нар (Наработка): {int(data.get('T_nar', 0) / 3600)} ч.\n")
+            output_lines.append(f"  Статус: ОНЛАЙН | Протокол: {getattr(client, 'protocol_type', '---')}")
+            output_lines.append(f"    Q (Энергия): {data.get('Q', '---'):.3f}")
+            output_lines.append(f"    M1 (Масса):  {data.get('M1', '---'):.3f}")
+            output_lines.append(f"    T1 (Темп.):  {data.get('T1', '---'):.2f} °C")
+            output_lines.append(f"    T2 (Темп.):  {data.get('T2', '---'):.2f} °C")
+            output_lines.append(f"    G1 (Расход): {data.get('G1', '---'):.3f} м³/ч")
+            output_lines.append(f"    T_нар (Наработка): {int(data.get('T_nar', 0) / 3600)} ч.\n")
             client.disconnect()
+        except ValueError:
+            output_lines.append("\nОШИБКА: Адрес, скорость и порт должны быть числами!")
         except Exception as e:
-            print(f"\nОШИБКА: {e}")
+            output_lines.append(f"\nОШИБКА: {e}")
         finally:
-            sys.stdout = old_stdout
-            self.widgets['btn_poll'].config(state='normal')
+            self.after(0, self._update_gui_after_poll, "\n".join(output_lines))
+
+    def _update_gui_after_poll(self, result_text):
+        """Безопасно обновляет GUI после завершения опроса."""
+        self.widgets['text_output'].configure(state='normal')
+        self.widgets['text_output'].insert(tk.END, result_text)
+        self.widgets['text_output'].see(tk.END)
+        self.widgets['text_output'].configure(state='disabled')
+        self.widgets['btn_poll'].config(state='normal')
 
 if __name__ == "__main__":
     app = TEM104GUI()
