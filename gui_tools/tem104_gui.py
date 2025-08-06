@@ -4,7 +4,6 @@
 Работает через COM-порт или TCP/IP, использует существующую логику из test104.py.
 """
 
-import io
 import json
 import os
 import sys
@@ -12,45 +11,55 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
+from ttkthemes import ThemedTk
+
 # Добавляем родительскую директорию в путь, чтобы найти core_library
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from core_library.test104 import TEM104_Serial_Client, TEM104_TCP_Client
 
-
 OBJECTS_FILE = "objects.json"
-
-
-
 
 
 class AddObjectDialog(tk.Toplevel):
     """Диалоговое окно для добавления нового объекта."""
+
     def __init__(self, parent):
         """Инициализирует диалоговое окно."""
         super().__init__(parent)
         self.parent = parent
         self.title("Добавить объект")
-        self.geometry("350x250")
+        self.geometry("350x280")
         self.resizable(False, False)
+
+        # --- Стили ---
+        self.configure(bg="#2E2E2E")
+        # Используем ту же тему и стиль, что и у родителя
+        style = ttk.Style(self)
+        style.theme_use(parent.style.theme_use())
+        parent.configure_styles(style, is_dialog=True)
+
+
         self.widgets = {}
         self.create_widgets()
+        self.transient(parent)
+        self.grab_set()
 
     def create_widgets(self):
         """Создает и размещает все виджеты в диалоговом окне."""
         # Имя
-        ttk.Label(self, text="Имя объекта:").pack(pady=4)
+        ttk.Label(self, text="Имя объекта:").pack(pady=(10, 2))
         self.widgets['entry_name'] = ttk.Entry(self, width=30)
         self.widgets['entry_name'].pack(pady=2)
         # Тип
         self.type_var = tk.StringVar(value=self.parent.conn_type.get())
-        frame_type = ttk.Frame(self)
-        frame_type.pack(pady=2)
+        frame_type = ttk.Frame(self, style="TFrame")
+        frame_type.pack(pady=5)
         ttk.Radiobutton(frame_type, text="COM", variable=self.type_var, value="COM").pack(side=tk.LEFT, padx=8)
         ttk.Radiobutton(frame_type, text="TCP", variable=self.type_var, value="TCP").pack(side=tk.LEFT, padx=8)
         # Параметры
-        self.widgets['frame_params'] = ttk.Frame(self)
-        self.widgets['frame_params'].pack(pady=2)
+        self.widgets['frame_params'] = ttk.Frame(self, style="TFrame")
+        self.widgets['frame_params'].pack(pady=5)
         self.widgets['label_com'] = ttk.Label(self.widgets['frame_params'], text="COM-порт:")
         self.widgets['entry_com'] = ttk.Entry(self.widgets['frame_params'], width=10)
         self.widgets['entry_com'].insert(0, self.parent.widgets['entry_com'].get())
@@ -69,7 +78,7 @@ class AddObjectDialog(tk.Toplevel):
         self.type_var.trace_add('write', lambda *a: self.toggle_params())
         self.toggle_params()
         # Кнопки
-        ttk.Button(self, text="Сохранить", command=self.save_obj).pack(pady=10)
+        ttk.Button(self, text="Сохранить", command=self.save_obj).pack(pady=15)
 
     def toggle_params(self):
         """Переключает видимость полей в зависимости от типа подключения (COM/TCP)."""
@@ -92,7 +101,7 @@ class AddObjectDialog(tk.Toplevel):
         """Сохраняет новый объект и закрывает диалоговое окно."""
         name = self.widgets['entry_name'].get().strip()
         if not name:
-            messagebox.showerror("Ошибка", "Введите имя объекта!")
+            messagebox.showerror("Ошибка", "Введите имя объекта!", parent=self)
             return
         try:
             addr = int(self.widgets['entry_addr'].get().strip())
@@ -108,20 +117,75 @@ class AddObjectDialog(tk.Toplevel):
             self.parent.update_object_list()
             self.destroy()
         except ValueError:
-            messagebox.showerror("Ошибка", "Адрес, скорость и порт должны быть числами!")
+            messagebox.showerror("Ошибка", "Адрес, скорость и порт должны быть числами!", parent=self)
 
 
-class TEM104GUI(tk.Tk):
+class TEM104GUI(ThemedTk):
     """Основной класс графического интерфейса для утилиты опроса ТЭМ-104."""
+
     def __init__(self):
         super().__init__()
+        self.set_theme("equilux") # Смена темы на более стабильную
         self.title("Опрос счетчиков ТЭМ-104")
-        self.geometry("600x540")
+        self.geometry("650x600")
         self.resizable(False, False)
+
+        # --- Цветовая палитра и стили ---
+        self.style = ttk.Style(self)
+        self.configure_styles(self.style)
+
         self.objects = []
         self.widgets = {}
         self.load_objects()
         self.create_widgets()
+
+    def configure_styles(self, style, is_dialog=False):
+        """Настраивает стили для виджетов."""
+        BG_COLOR = "#2E2E2E"
+        FG_COLOR = "#FFFFFF"
+        WIDGET_BG = "#3C3C3C"
+        ACCENT_COLOR = "#007ACC"
+        INSERT_COLOR = "#FFFFFF"  # White cursor
+        DISABLED_BG = "#282828"
+        DISABLED_FG = "#999999"
+        BORDER_COLOR = "#555555"
+
+        if not is_dialog:
+            self.configure(bg=BG_COLOR)
+
+        style.configure("TLabel", background=BG_COLOR, foreground=FG_COLOR, font=("Segoe UI", 10))
+        style.configure("TFrame", background=BG_COLOR)
+        style.configure("TButton", background=ACCENT_COLOR, foreground=FG_COLOR, font=("Segoe UI", 10, "bold"),
+                             borderwidth=0, relief='flat')
+        style.map("TButton", background=[("active", "#005f9e")])
+        style.configure("TRadiobutton", background=BG_COLOR, foreground=FG_COLOR, font=("Segoe UI", 10))
+
+        # --- Более надежная стилизация для полей ввода ---
+        style.configure("TEntry",
+                             fieldbackground=WIDGET_BG,
+                             foreground=FG_COLOR,
+                             insertcolor=INSERT_COLOR,
+                             bordercolor=BORDER_COLOR,
+                             borderwidth=1,
+                             relief='flat')
+        style.map("TEntry",
+                       bordercolor=[('focus', ACCENT_COLOR)],
+                       fieldbackground=[('disabled', DISABLED_BG)],
+                       foreground=[('disabled', DISABLED_FG)])
+
+        style.configure("TCombobox",
+                             fieldbackground=WIDGET_BG,
+                             background=WIDGET_BG,
+                             foreground=FG_COLOR,
+                             arrowcolor=FG_COLOR,
+                             bordercolor=BORDER_COLOR,
+                             borderwidth=1,
+                             relief='flat')
+        style.map("TCombobox",
+                       fieldbackground=[('readonly', WIDGET_BG), ('disabled', DISABLED_BG)],
+                       foreground=[('readonly', FG_COLOR), ('disabled', DISABLED_FG)],
+                       bordercolor=[('focus', ACCENT_COLOR)])
+
 
     def load_objects(self):
         """Загружает список объектов из файла JSON."""
@@ -142,29 +206,20 @@ class TEM104GUI(tk.Tk):
     def create_widgets(self):
         """Создает и размещает все виджеты в главном окне."""
         # 1. Заголовок
-        ttk.Label(self, text="Утилита для опроса счетчиков ТЭМ-104", font=("Arial", 14, "bold")).pack(pady=8)
+        ttk.Label(self, text="Утилита для опроса счетчиков ТЭМ-104", font=("Segoe UI", 16, "bold")).pack(pady=20)
 
-        # 2. Список объектов
-        frame_obj = ttk.Frame(self)
-        frame_obj.pack(pady=4)
-        ttk.Label(frame_obj, text="Объект:").pack(side=tk.LEFT)
-        self.obj_var = tk.StringVar()
-        self.widgets['combo_obj'] = ttk.Combobox(frame_obj, textvariable=self.obj_var, state="readonly", width=30)
-        self.widgets['combo_obj'].pack(side=tk.LEFT, padx=4)
-        self.update_object_list()
-        self.widgets['combo_obj'].bind("<<ComboboxSelected>>", self.on_object_selected)
-        ttk.Button(frame_obj, text="Добавить объект", command=self.add_object_dialog).pack(side=tk.LEFT, padx=4)
-
-        # 3. Переключатель типа подключения
+        # 3. Переключатель типа подключения (СОЗДАЕМ РАНЬШЕ)
         self.conn_type = tk.StringVar(value="COM")
         frame_type = ttk.Frame(self)
-        frame_type.pack(pady=4)
-        ttk.Radiobutton(frame_type, text="Локальный COM-порт", variable=self.conn_type, value="COM", command=self.toggle_fields).pack(side=tk.LEFT, padx=10)
-        ttk.Radiobutton(frame_type, text="Сеть TCP/IP (модем)", variable=self.conn_type, value="TCP", command=self.toggle_fields).pack(side=tk.LEFT, padx=10)
+        frame_type.pack(pady=10)
+        ttk.Radiobutton(frame_type, text="Локальный COM-порт", variable=self.conn_type, value="COM",
+                        command=self.toggle_fields).pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(frame_type, text="Сеть TCP/IP (модем)", variable=self.conn_type, value="TCP",
+                        command=self.toggle_fields).pack(side=tk.LEFT, padx=10)
 
-        # 4. Поля для параметров
+        # 4. Поля для параметров (СОЗДАЕМ РАНЬШЕ)
         self.widgets['frame_params'] = ttk.Frame(self)
-        self.widgets['frame_params'].pack(pady=4)
+        self.widgets['frame_params'].pack(pady=10)
         # COM
         self.widgets['label_com'] = ttk.Label(self.widgets['frame_params'], text="COM-порт:")
         self.widgets['entry_com'] = ttk.Entry(self.widgets['frame_params'], width=10)
@@ -185,16 +240,29 @@ class TEM104GUI(tk.Tk):
         self.widgets['entry_addr'].insert(0, "1")
         self.toggle_fields()
 
+        # 2. Список объектов (СОЗДАЕМ ПОЗЖЕ)
+        frame_obj = ttk.Frame(self)
+        frame_obj.pack(pady=10)
+        ttk.Label(frame_obj, text="Объект:").pack(side=tk.LEFT)
+        self.obj_var = tk.StringVar()
+        self.widgets['combo_obj'] = ttk.Combobox(frame_obj, textvariable=self.obj_var, state="readonly", width=30)
+        self.widgets['combo_obj'].pack(side=tk.LEFT, padx=4)
+        self.update_object_list()  # Теперь этот вызов безопасен
+        self.widgets['combo_obj'].bind("<<ComboboxSelected>>", self.on_object_selected)
+        ttk.Button(frame_obj, text="Добавить", command=self.add_object_dialog).pack(side=tk.LEFT, padx=4)
+
         # 5. Кнопка "Опросить"
         self.widgets['btn_poll'] = ttk.Button(self, text="Опросить", command=self.start_poll)
-        self.widgets['btn_poll'].pack(pady=8)
+        self.widgets['btn_poll'].pack(pady=20)
 
         # 6. Текстовое поле для вывода
-        self.widgets['text_output'] = scrolledtext.ScrolledText(self, width=72, height=16, state='disabled', font=("Consolas", 10))
-        self.widgets['text_output'].pack(padx=8, pady=4)
+        self.widgets['text_output'] = scrolledtext.ScrolledText(self, width=72, height=16, state='disabled',
+                                                                font=("Consolas", 10), bg="#1E1E1E", fg="white",
+                                                                relief='flat', borderwidth=1)
+        self.widgets['text_output'].pack(padx=10, pady=10)
 
         # 7. Кнопка "Выход"
-        ttk.Button(self, text="Выход", command=self.destroy).pack(pady=4)
+        ttk.Button(self, text="Выход", command=self.destroy).pack(pady=10)
 
     def toggle_fields(self):
         """Переключает видимость полей в зависимости от типа подключения (COM/TCP)."""
@@ -220,27 +288,32 @@ class TEM104GUI(tk.Tk):
         self.widgets['combo_obj']['values'] = names
         if names:
             self.widgets['combo_obj'].current(0)
+            self.on_object_selected()
 
     def on_object_selected(self, _event=None):
         """Заполняет поля данными выбранного объекта."""
-        idx = self.widgets['combo_obj'].current()
-        if idx < 0 or idx >= len(self.objects):
-            return
-        obj = self.objects[idx]
-        self.conn_type.set(obj['type'])
-        if obj['type'] == 'COM':
-            self.widgets['entry_com'].delete(0, tk.END)
-            self.widgets['entry_com'].insert(0, obj.get('com', 'COM3'))
-            self.widgets['entry_baud'].delete(0, tk.END)
-            self.widgets['entry_baud'].insert(0, str(obj.get('baud', '9600')))
-        else:
-            self.widgets['entry_ip'].delete(0, tk.END)
-            self.widgets['entry_ip'].insert(0, obj.get('ip', '192.168.1.100'))
-            self.widgets['entry_port'].delete(0, tk.END)
-            self.widgets['entry_port'].insert(0, str(obj.get('port', '5009')))
-        self.widgets['entry_addr'].delete(0, tk.END)
-        self.widgets['entry_addr'].insert(0, str(obj.get('addr', '1')))
-        self.toggle_fields()
+        try:
+            idx = self.widgets['combo_obj'].current()
+            if idx < 0 or idx >= len(self.objects):
+                return
+            obj = self.objects[idx]
+            self.conn_type.set(obj['type'])
+            if obj['type'] == 'COM':
+                self.widgets['entry_com'].delete(0, tk.END)
+                self.widgets['entry_com'].insert(0, obj.get('com', 'COM3'))
+                self.widgets['entry_baud'].delete(0, tk.END)
+                self.widgets['entry_baud'].insert(0, str(obj.get('baud', '9600')))
+            else:
+                self.widgets['entry_ip'].delete(0, tk.END)
+                self.widgets['entry_ip'].insert(0, obj.get('ip', '192.168.1.100'))
+                self.widgets['entry_port'].delete(0, tk.END)
+                self.widgets['entry_port'].insert(0, str(obj.get('port', '5009')))
+            self.widgets['entry_addr'].delete(0, tk.END)
+            self.widgets['entry_addr'].insert(0, str(obj.get('addr', '1')))
+            self.toggle_fields()
+        except tk.TclError:
+            # Это может произойти, если список объектов пуст
+            pass
 
     def add_object_dialog(self):
         """Открывает диалоговое окно для добавления нового объекта."""
@@ -256,7 +329,7 @@ class TEM104GUI(tk.Tk):
 
     def poll_device(self):
         """
-        4. Опрос счетчика и вывод только ключевых параметров
+        Опрос счетчика и вывод только ключевых параметров.
         """
         output_lines = []
         try:
@@ -294,6 +367,7 @@ class TEM104GUI(tk.Tk):
         self.widgets['text_output'].see(tk.END)
         self.widgets['text_output'].configure(state='disabled')
         self.widgets['btn_poll'].config(state='normal')
+
 
 if __name__ == "__main__":
     app = TEM104GUI()

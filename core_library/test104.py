@@ -292,6 +292,9 @@ class TEM104_Serial_Client(TEM104_Base_Client):
             self.ser.reset_output_buffer()
             time.sleep(0.1)
             print("Порт успешно открыт.")
+        except serial.SerialException as e:
+            self.ser = None
+            raise ConnectionError(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось открыть COM-порт. {e}")
 
     def disconnect(self):
         if self.ser and self.ser.is_open:
