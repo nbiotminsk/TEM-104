@@ -33,6 +33,10 @@ TEM-104/
 └── 📄 README.md             # Этот файл
 ```
 
+## 🖼️ Скриншот интерфейса
+
+![GUI Screenshot](docs/img/gui_screenshot.png)
+
 ## 📚 Подробное описание компонентов
 
 ### 🔧 **core_library/** - Основная библиотека
