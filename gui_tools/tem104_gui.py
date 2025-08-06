@@ -156,7 +156,7 @@ class TEM104GUI(ThemedTk):
         style.configure("TLabel", background=BG_COLOR, foreground=FG_COLOR, font=("Segoe UI", 10))
         style.configure("TFrame", background=BG_COLOR)
         style.configure("TButton", background=ACCENT_COLOR, foreground=FG_COLOR, font=("Segoe UI", 10, "bold"),
-                             borderwidth=0, relief='flat')
+                             borderwidth=0, relief='flat', anchor='center', padding=(0, 5))
         style.map("TButton", background=[("active", "#005f9e")])
         style.configure("TRadiobutton", background=BG_COLOR, foreground=FG_COLOR, font=("Segoe UI", 10))
 
@@ -262,7 +262,18 @@ class TEM104GUI(ThemedTk):
         self.widgets['text_output'].pack(padx=10, pady=10)
 
         # 7. Кнопка "Выход"
-        ttk.Button(self, text="Выход", command=self.destroy).pack(pady=10)
+        tk.Button(self,
+                  text="Выход",
+                  command=self.destroy,
+                  font=("Segoe UI", 10, "bold"),
+                  bg="#007ACC",
+                  fg="#FFFFFF",
+                  relief="flat",
+                  activebackground="#005f9e",
+                  activeforeground="#FFFFFF",
+                  padx=10,
+                  pady=5
+                  ).pack(pady=10)
 
     def toggle_fields(self):
         """Переключает видимость полей в зависимости от типа подключения (COM/TCP)."""
